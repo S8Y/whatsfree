@@ -1,0 +1,14 @@
+{
+  "name": "whatsfree",
+  "label": "Free Models",
+  "description": "Free LLM model availability dashboard — live free model listings from OpenRouter, Novita, and other Hermes providers.",
+  "icon": "Sparkles",
+  "version": "1.0.0",
+  "tab": {
+    "path": "/whatsfree",
+    "position": "after:config"
+  },
+  "entry": "dist/index.js",
+  "css": "dist/style.css",
+  "api": "plugin_api.py"
+}

@@ -1,0 +1,5 @@
+manifest_version: 1
+name: whatsfree
+version: 1.0.0
+description: "Free LLM model dashboard — discover and track free AI models available through Hermes-supported providers."
+homepage: "https://github.com/xraysight/whatsfree"
