@@ -449,7 +449,7 @@
         : null,
 
       // Loading
-      loading && !data ? e(LoadingState()) : null,
+      loading && !data ? e(LoadingState, null) : null,
 
       // Error
       error ? e(ErrorState, { message: error, onRetry: function () { loadData(false); } }) : null,
