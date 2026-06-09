@@ -1,188 +1,360 @@
-/* WhatsFree dashboard plugin -- enhanced frontend (IIFE) */
+/* Hermes WhatsFree Plugin — dashboard UI tab.
+ * Fetches free models directly from public internet endpoints (OpenRouter,
+ * HuggingFace Router, Ollama Cloud) so no dashboard auth is needed for the
+ * core feature. Backend key-detection API is called only when available.
+ */
 (function () {
   "use strict";
 
-  const SDK = window.__HERMES_PLUGIN_SDK__;
-  const React = SDK.React;
-  const hooks = SDK.hooks;
-  const components = SDK.components;
-  const Card = components.Card;
-  const CardHeader = components.CardHeader;
-  const CardTitle = components.CardTitle;
-  const CardContent = components.CardContent;
-  const Badge = components.Badge;
-  const Button = components.Button;
-  const Separator = components.Separator;
-  const useState = hooks.useState;
-  const useEffect = hooks.useEffect;
-  const useMemo = hooks.useMemo;
-  const e = React.createElement;
-
-  const API_BASE = "/api/plugins/whatsfree";
+  var SDK = window.__HERMES_PLUGIN_SDK__;
+  var React = SDK.React;
+  var hooks = SDK.hooks;
+  var components = SDK.components;
+  var Card = components.Card;
+  var CardHeader = components.CardHeader;
+  var CardTitle = components.CardTitle;
+  var CardContent = components.CardContent;
+  var Badge = components.Badge;
+  var Button = components.Button;
+  var Separator = components.Separator;
+  var useState = hooks.useState;
+  var useEffect = hooks.useEffect;
+  var useMemo = hooks.useMemo;
+  var e = React.createElement;
 
   function fmtTime(value) {
     if (!value) return "\u2014";
-    try {
-      var date = new Date(value);
-      if (Number.isNaN(date.getTime())) return String(value);
-      return date.toLocaleString(undefined, {
-        dateStyle: "short",
-        timeStyle: "medium",
-      });
-    } catch {
-      return String(value);
-    }
-  }
-
-  function fmtCtx(tokens) {
-    if (!tokens || tokens === 0) return "\u2014";
-    var n = Number(tokens);
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
-    if (n >= 1000) return (n / 1000).toFixed(0) + "K";
-    return String(n);
+    var d = typeof value === "number"
+      ? new Date(value < 1000000000000 ? value * 1000 : value)
+      : new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+    return d.toLocaleString(undefined, { dateStyle: "short", timeStyle: "medium" });
   }
 
   function classNames() {
-    var result = [];
+    var cls = [];
     for (var i = 0; i < arguments.length; i++) {
-      if (arguments[i]) result.push(arguments[i]);
+      var arg = arguments[i];
+      if (!arg) continue;
+      if (typeof arg === "string") cls.push(arg);
+      else if (Array.isArray(arg)) cls.push(classNames.apply(null, arg));
+      else if (typeof arg === "object") for (var k in arg) if (arg[k]) cls.push(k);
     }
-    return result.join(" ");
+    return cls.join(" ");
   }
 
-  function ProviderIcon(_ref) {
-    var provider = _ref.provider;
-    var icons = {
-      "OpenRouter (Free)": "\u26A1",
-      DeepSeek: "\u00D6",
-      "Google Gemini": "\u2601",
-      "HuggingFace Community": "\u00D7A4",
-      "Nous Research": "\u2728",
-      "OpenCode Zen": "\u26A1",
-      "OpenCode Go": "\u26A1",
-      "OpenAI Codex": "\u25B6",
-      "GitHub Copilot": "\uD83D\uDC4A",
-      "Ollama Cloud": "\u2601",
-      MiniMax: "\u25A8",
-      "Qwen Portal": "\u8D2D",
-      "NVIDIA NIM": "\u25B3",
-      "Alibaba DashScope": "\u963F",
-      "Kimi (Moonshot AI)": "\u6708",
-      "Z.AI (GLM / Zhipu)": "\u667A",
-      "xAI (Grok)": "\uD7A4",
-      "Custom / Local": "\uD83D\uDCBB",
-    };
-    return e("span", { className: "wf-provider-icon" }, icons[provider] || "\uD83E\uDE84");
+  /* ─── Data Sources ───────────────────────────────────────*/
+
+  /* OpenRouter: GET /api/v1/models, filter where pricing.completion=0
+   * and pricing.prompt=0. Public endpoint, no key needed for listing. */
+  var OR_API = "https://openrouter.ai/api/v1/models";
+
+  /* HuggingFace: text-generation-inference router, publicly listed models */
+  var HF_API = "https://router.huggingface.co/hf-inference/v1/models";
+
+  /* Ollama cloud listing */
+  var OLLAMA_API = "https://cloud.ollama.com/api/v1/models";
+
+  /* Backend (dashboard auth-gated) for key detection */
+  var API_BASE = "/api/plugins/whatsfree";
+
+  /* Free tier classification by provider id */
+  var PROVIDER_FREE_TYPES = {
+    openrouter: "public",
+    huggingface: "community",
+    "ollama-cloud": "community",
+    deepseek: "key_free_quota",
+    gemini: "key_free_quota",
+    copilot: "key_free_quota",
+    nvidia: "key_free_quota",
+    "opencode-zen": "key_free_quota",
+    "opencode-go": "key_free_quota",
+    "openai-codex": "oauth_free",
+    nous: "oauth_free",
+    "qwen-oauth": "oauth_free",
+    anthropic: "no_free_tier",
+    "azure-foundry": "no_free_tier",
+    bedrock: "no_free_tier",
+    xai: "no_free_tier",
+    custom: "local",
+  };
+
+  var PROVIDER_DISPLAY = {
+    openrouter: "OpenRouter (Free)",
+    huggingface: "HuggingFace Community",
+    "ollama-cloud": "Ollama Cloud",
+    deepseek: "DeepSeek",
+    gemini: "Google Gemini",
+    copilot: "GitHub Copilot",
+    nvidia: "NVIDIA NIM",
+    "opencode-zen": "OpenCode Zen",
+    "opencode-go": "OpenCode Go",
+    "openai-codex": "OpenAI Codex",
+    nous: "Nous Research",
+    "qwen-oauth": "Qwen Portal",
+    anthropic: "Anthropic",
+    "azure-foundry": "Azure AI Foundry",
+    bedrock: "AWS Bedrock",
+    xai: "xAI",
+    custom: "Custom / Local",
+    alibaba: "Alibaba",
+    "alibaba-coding-plan": "Alibaba Coding Plan",
+    arcee: "Arcee",
+    gmi: "GMI",
+    kilocode: "Kilocode",
+    "kimi-coding": "Kimi Coding",
+    minimax: "MiniMax",
+    novita: "Novita",
+    stepfun: "StepFun",
+    xiaomi: "Xiaomi",
+    zai: "Z.AI",
+  };
+
+  /* Known free models from key-required providers (curated fallback) */
+  var CURATED_FREE = [
+    { id: "deepseek-chat",           provider: "deepseek",    free_type: "key_free_quota", context: 65536 },
+    { id: "deepseek-reasoner",       provider: "deepseek",    free_type: "key_free_quota", context: 65536 },
+    { id: "gemini-2.0-flash-exp",    provider: "gemini",      free_type: "key_free_quota", context: 1048576 },
+    { id: "gemini-2.0-flash-lite-preview-02-05", provider: "gemini", free_type: "key_free_quota", context: 1048576 },
+    { id: "gemini-1.5-flash",        provider: "gemini",      free_type: "key_free_quota", context: 1048576 },
+    { id: "gpt-4o-mini",             provider: "copilot",     free_type: "key_free_quota", context: 128000 },
+    { id: "gpt-4o",                  provider: "copilot",     free_type: "key_free_quota", context: 128000 },
+    { id: "nvidia/llama-3.1-nemotron-70b-instruct", provider: "nvidia", free_type: "key_free_quota", context: 128000 },
+    { id: "opencode-zen-7b",         provider: "opencode-zen", free_type: "key_free_quota", context: 32768 },
+    { id: "opencode-go-nemotron",    provider: "opencode-go",  free_type: "key_free_quota", context: 128000 },
+    { id: "codex-claude-sonnet-4",   provider: "openai-codex", free_type: "oauth_free", context: 200000 },
+    { id: "codex-gpt-4o",           provider: "openai-codex", free_type: "oauth_free", context: 128000 },
+    { id: "nous-chat-v1",           provider: "nous",         free_type: "oauth_free", context: 65536 },
+    { id: "nous-chat-v1-32k",       provider: "nous",         free_type: "oauth_free", context: 32768 },
+    { id: "qwen-turbo",             provider: "qwen-oauth",   free_type: "oauth_free", context: 131072 },
+    { id: "qwen-plus",              provider: "qwen-oauth",   free_type: "oauth_free", context: 131072 },
+    { id: "qwen-max",               provider: "qwen-oauth",   free_type: "oauth_free", context: 32768 },
+  ];
+
+  /* ─── Live Fetch Functions ──────────────────────────────*/
+
+  function fetchOpenRouter() {
+    return fetch(OR_API, { headers: { "User-Agent": "hermes-whatsfree" } })
+      .then(function (r) { if (!r.ok) throw new Error("OR " + r.status); return r.json(); })
+      .then(function (data) {
+        if (!data || !data.data) return [];
+        return data.data
+          .filter(function (m) {
+            var p = m.pricing || {};
+            return parseFloat(p.completion || 0) === 0 && parseFloat(p.prompt || 0) === 0 && m.id;
+          })
+          .map(function (m) {
+            return {
+              id: m.id,
+              provider: "openrouter",
+              provider_display: "OpenRouter (Free)",
+              free_tier_type: "public",
+              context: m.context_length || null,
+              _source: "live",
+            };
+          });
+      });
   }
 
-  function SourceBadge(_ref2) {
-    var source = _ref2.source;
-    var config = {
-      live: { label: "Live", tone: "success" },
-      live_hf: { label: "Live (HF)", tone: "success" },
-      live_ollama: { label: "Live (Ollama)", tone: "success" },
-      probed: { label: "Probed", tone: "info" },
-      curated: { label: "Curated", tone: "secondary" },
-    };
-    var info = config[source] || { label: source, tone: "outline" };
-    return e(Badge, { tone: info.tone, size: "sm" }, info.label);
+  function fetchHuggingFace() {
+    return fetch(HF_API, { headers: { "User-Agent": "hermes-whatsfree" } })
+      .then(function (r) { if (!r.ok) throw new Error("HF " + r.status); return r.json(); })
+      .then(function (data) {
+        if (!Array.isArray(data)) return [];
+        return data
+          .filter(function (m) { return m.id; })
+          .slice(0, 120)
+          .map(function (m) {
+            return {
+              id: m.id,
+              provider: "huggingface",
+              provider_display: "HuggingFace Community",
+              free_tier_type: "community",
+              context: null,
+              _source: "live_hf",
+            };
+          });
+      });
   }
 
-  function FreeTierBadge(_ref3) {
-    var type = _ref3.type;
-    var labels = {
-      public: { label: "Public", tone: "success" },
-      community: { label: "Community", tone: "info" },
-      key_free_quota: { label: "Free w/ Key", tone: "warning" },
-      oauth_free: { label: "Free (OAuth)", tone: "info" },
-      no_free_tier: { label: "Paid", tone: "critical" },
-      unknown: { label: "Unknown", tone: "outline" },
-      local: { label: "Local", tone: "secondary" },
-    };
-    var info = labels[type] || { label: type, tone: "outline" };
-    return e(Badge, { tone: info.tone, size: "sm" }, info.label);
+  function fetchOllama() {
+    return fetch(OLLAMA_API, { headers: { "User-Agent": "hermes-whatsfree" } })
+      .then(function (r) { if (!r.ok) throw new Error("Ollama " + r.status); return r.json(); })
+      .then(function (data) {
+        var models = data && (data.models || data.data);
+        if (!Array.isArray(models)) return [];
+        return models
+          .filter(function (m) { return m.name || m.id; })
+          .map(function (m) {
+            return {
+              id: m.name || m.id,
+              provider: "ollama-cloud",
+              provider_display: "Ollama Cloud",
+              free_tier_type: "community",
+              context: null,
+              _source: "live_ollama",
+            };
+          });
+      });
   }
+
+  function fetchBackendKeyStatus() {
+    return SDK.fetchJSON(API_BASE + "/keys")
+      .then(function (data) { return data; })
+      .catch(function () { return { env_vars_found: [], total_env_vars_found: 0, sources_scanned: [] }; });
+  }
+
+  function fetchBackendProviderStatus() {
+    return SDK.fetchJSON(API_BASE + "/provider-status")
+      .then(function (data) { return data; })
+      .catch(function () { return { providers: [] }; });
+  }
+
+  /* ─── Aggregate All Sources ────────────────────────────*/
+
+  function aggregateModels(orModels, hfModels, ollamaModels, curated) {
+    var all = orModels.concat(hfModels).concat(ollamaModels).concat(curated);
+    var grouped = {};
+    all.forEach(function (m) {
+      var key = m.provider + "|" + m.id;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(m);
+    });
+    var deduped = [];
+    for (var key in grouped) {
+      var ms = grouped[key];
+      var live = ms.filter(function (m) { return m._source && m._source.indexOf("live") === 0; });
+      deduped.push(live.length > 0 ? live[0] : ms[0]);
+    }
+
+    var bySource = {};
+    var byFreeType = {};
+    var providerSet = {};
+    deduped.forEach(function (m) {
+      bySource[m._source] = (bySource[m._source] || 0) + 1;
+      byFreeType[m.free_tier_type] = (byFreeType[m.free_tier_type] || 0) + 1;
+      providerSet[m.provider_display] = true;
+    });
+
+    var noKey = deduped.filter(function (m) { return m.free_tier_type === "public" || m.free_tier_type === "community"; });
+    var needsKey = deduped.filter(function (m) { return m.free_tier_type !== "public" && m.free_tier_type !== "community"; });
+
+    return {
+      models: deduped,
+      summary: {
+        total: deduped.length,
+        providers_count: Object.keys(providerSet).length,
+        no_key_needed: noKey.length,
+        key_needed: needsKey.length,
+        by_source: bySource,
+        by_free_type: byFreeType,
+      },
+    };
+  }
+
+  /* ─── View Helpers ─────────────────────────────────────*/
+
+  function sourceLabel(s) {
+    var map = { live: "Live", live_hf: "Live (HF)", live_ollama: "Live (Ollama)", curated: "Curated" };
+    return map[s] || s;
+  }
+
+  function sourceTone(s) {
+    var map = { live: "success", live_hf: "info", live_ollama: "info", curated: "outline" };
+    return map[s] || "outline";
+  }
+
+  function freeTone(t) {
+    var map = { public: "success", community: "info", key_free_quota: "warning", oauth_free: "info", no_free_tier: "critical", local: "secondary" };
+    return map[t] || "outline";
+  }
+
+  function freeLabel(t) {
+    var map = {
+      public: "Public", community: "Community", key_free_quota: "Free w/ Key",
+      oauth_free: "Free (OAuth)", no_free_tier: "Paid", local: "Local", unknown: "Unknown"
+    };
+    return map[t] || t;
+  }
+
+  /* ─── Sub-components ───────────────────────────────────*/
 
   function LoadingState() {
     return e("div", { className: "wf-loading" },
       e("div", { className: "wf-spinner" }),
-      e("span", null, "Fetching free models\u2026")
+      e("p", null, "Fetching free models from OpenRouter, HuggingFace, and Ollama...")
     );
   }
 
-  function ErrorState(_ref4) {
-    var message = _ref4.message, onRetry = _ref4.onRetry;
+  function ErrorState(_ref) {
+    var message = _ref.message, onRetry = _ref.onRetry;
     return e(Card, { className: "wf-error-card" },
       e(CardContent, null,
-        e("div", { className: "wf-error-content" },
-          e("div", { className: "wf-error-icon" }, "\u26A0"),
-          e("div", null,
-            e("p", { className: "wf-error-title" }, "Failed to load models"),
-            e("p", { className: "wf-error-detail" }, message),
-            onRetry ? e(Button, { onClick: onRetry, size: "sm", variant: "outline" }, "Retry") : null
-          )
-        )
+        e("p", { className: "wf-error-title" }, "\u26A0\uFE0F Failed to load models"),
+        e("p", { className: "wf-error-detail" }, message),
+        onRetry ? e(Button, { onClick: onRetry, size: "sm", variant: "outline", className: "wf-retry-btn" }, "Retry") : null
       )
     );
   }
 
-  function ModelCard(_ref5) {
-    var model = _ref5.model;
-    return e(Card, { className: "wf-model-card" },
-      e(CardHeader, { className: "wf-model-header" },
-        e("div", { className: "wf-model-title-row" },
-          e("div", { className: "wf-model-info" },
-            e("div", { className: "wf-model-name" },
-              e(ProviderIcon, { provider: model.provider_display }),
-              e("span", null, model.name || model.id)
-            ),
-            e("div", { className: "wf-model-meta" },
-              e("span", { className: "wf-model-provider" }, model.provider_display),
-              model.context_length ? e(React.Fragment, null,
-                e("span", { className: "wf-model-sep" }, "\u00B7"),
-                e("span", { className: "wf-model-ctx" }, fmtCtx(model.context_length) + " ctx")
-              ) : null,
-              model.key_present === true
-                ? e(React.Fragment, null,
-                    e("span", { className: "wf-model-sep" }, "\u00B7"),
-                    e(Badge, { tone: "success", size: "sm" }, "Key OK")
-                  )
-                : null,
-              model.requires_key && !model.key_present
-                ? e(React.Fragment, null,
-                    e("span", { className: "wf-model-sep" }, "\u00B7"),
-                    e(Badge, { tone: "warning", size: "sm" }, "No Key")
-                  )
-                : null,
-            )
-          ),
-          e("div", { className: "wf-model-badges" },
-            e(SourceBadge, { source: model._source }),
-            e(FreeTierBadge, { type: model.free_tier_type })
+  function SummaryCards(_ref2) {
+    var summary = _ref2.summary;
+    if (!summary) return null;
+    var items = [
+      { label: "Free Models", value: summary.total, tone: "success" },
+      { label: "Providers", value: summary.providers_count, tone: "info" },
+      { label: "No Key Needed", value: summary.no_key_needed, tone: "success" },
+      { label: "Key Required", value: summary.key_needed, tone: "warning" },
+    ];
+    return e("div", { className: "wf-summary-grid" },
+      items.map(function (item) {
+        return e(Card, { key: item.label, className: "wf-summary-card" },
+          e(CardContent, null,
+            e("div", { className: "wf-summary-value" }, String(item.value)),
+            e("div", { className: "wf-summary-label" }, item.label)
           )
-        ),
-        model.description
-          ? e("p", { className: "wf-model-desc" }, model.description)
-          : null,
-        e("div", { className: "wf-model-footer" },
-          e("code", { className: "wf-model-id" }, model.id),
-          model.auth_required && model.auth_required !== "None"
-            ? e("span", { className: "wf-model-auth" }, model.auth_required)
-            : null
-        )
+        );
+      })
+    );
+  }
+
+  function ProviderIcon(_ref3) {
+    var provider = _ref3.provider;
+    var icon = (provider || "").toLowerCase().charAt(0);
+    return e("span", { className: "wf-provider-icon" }, icon);
+  }
+
+  function SourceBadge(_ref4) {
+    var source = _ref4.source;
+    return e(Badge, { tone: sourceTone(source), size: "sm" }, sourceLabel(source));
+  }
+
+  function FreeTierBadge(_ref5) {
+    var freeType = _ref5.freeType;
+    return e(Badge, { tone: freeTone(freeType), size: "sm" }, freeLabel(freeType));
+  }
+
+  function ModelCard(_ref6) {
+    var model = _ref6.model;
+    return e("div", { className: "wf-model-card" },
+      e("div", { className: "wf-model-name" }, model.id),
+      e("div", { className: "wf-model-tags" },
+        e(FreeTierBadge, { freeType: model.free_tier_type }),
+        e(SourceBadge, { source: model._source }),
+        model.context ? e(Badge, { tone: "outline", size: "sm" }, String(model.context)) : null
       )
     );
   }
 
-  function ProviderGroup(_ref6) {
-    var provider = _ref6.provider, models = _ref6.models;
+  function ProviderGroup(_ref7) {
+    var provider = _ref7.provider, models = _ref7.models;
     var _useState = useState(true), collapsed = _useState[0], setCollapsed = _useState[1];
     return e("div", { className: "wf-provider-group" },
       e("button", {
         className: "wf-provider-toggle",
         onClick: function () { setCollapsed(!collapsed); },
       },
-        e("span", { className: classNames("wf-chevron", collapsed ? "wf-chevron-collapsed" : "") }, "\u25BC"),
+        e("span", { className: classNames("wf-chevron", collapsed ? "wf-chevron-collapsed" : "") }, ""),
         e(ProviderIcon, { provider: provider }),
         e("span", { className: "wf-provider-name" }, provider),
         e(Badge, { tone: "outline", size: "sm" }, models.length + " model" + (models.length === 1 ? "" : "s"))
@@ -195,107 +367,58 @@
     );
   }
 
-  function SummaryCards(_ref7) {
-    var summary = _ref7.summary;
-    if (!summary) return null;
-    var items = [
-      { label: "Total Free Models", value: String(summary.total || 0) },
-      { label: "Providers", value: String(summary.providers_count || 0) },
-      { label: "No Key Needed", value: String(summary.no_key_needed || 0) },
-      { label: "With Key Present", value: String(summary.key_present || 0) },
-    ];
-    return e("div", { className: "wf-summary-grid" },
-      items.map(function (item) {
-        return e(Card, { key: item.label, className: "wf-summary-card" },
-          e(CardContent, { className: "wf-summary-content" },
-            e("div", { className: "wf-summary-label" }, item.label),
-            e("div", { className: "wf-summary-value" }, item.value)
-          )
-        );
-      })
-    );
-  }
+  function KeyStatusPanel(_ref8) {
+    var keys = _ref8.keys, providerStatus = _ref8.providerStatus;
+    if (!keys && !providerStatus) return null;
 
-  function KeyStatus(_ref8) {
-    var envKeysFound = _ref8.envKeysFound, providerStatus = _ref8.providerStatus;
-    // Count providers by key presence
-    var withKeys = 0, noKeys = 0, oauth = 0, freeProviders = 0;
-    if (providerStatus) {
-      providerStatus.forEach(function (p) {
-        if (p.public_listing) freeProviders++;
-        else if (p.key_present) withKeys++;
-        else if (p.oauth) oauth++;
-        else noKeys++;
+    // Build provider status map
+    var statusByProvider = {};
+    var hasLiveData = false;
+    if (providerStatus && providerStatus.providers) {
+      hasLiveData = true;
+      providerStatus.providers.forEach(function (p) {
+        statusByProvider[p.id] = p;
       });
     }
 
-    var total = providerStatus ? providerStatus.length : 0;
+    var envKeys = (keys && keys.env_vars_found) || [];
+    var keyIntro = envKeys.length > 0
+      ? "Detected " + envKeys.length + " API key" + (envKeys.length === 1 ? "" : "s") + ": " + envKeys.join(", ")
+      : "No API keys detected. Add keys to ~/.hermes/.env for deeper provider probing.";
 
-    return e("div", { className: "wf-key-section" },
-      e(Card, { className: "wf-key-card" },
-        e(CardContent, null,
-          envKeysFound && envKeysFound.length > 0
-            ? e("p", { className: "wf-key-found" },
-                "Configured keys: ",
-                e("code", { className: "wf-key-list" }, envKeysFound.join(", "))
-              )
-            : e("p", { className: "wf-key-hint" },
-                "No Hermes API keys detected. Models marked \"Free w/ Key\" or ",
-                "\"Free (OAuth)\" need a configured key. ",
-                "Run \u2018hermes setup\u2019 or visit provider signup pages."
-              )
-        )
-      ),
-      e("div", { className: "wf-provider-stats" },
-        e("span", { className: "wf-ps-label" }, "Provider status: "),
-        e(Badge, { tone: "info", size: "sm" }, withKeys + " key-configured"),
-        e(Badge, { tone: "warning", size: "sm" }, noKeys + " key-required"),
-        e(Badge, { tone: "secondary", size: "sm" }, oauth + " OAuth"),
-        e(Badge, { tone: "success", size: "sm" }, freeProviders + " public"),
-        e("span", { className: "wf-ps-total" }, "/ " + total + " total")
-      )
-    );
-  }
-
-  function ProviderGrid(_ref9) {
-    var providerStatus = _ref9.providerStatus;
-    if (!providerStatus || providerStatus.length === 0) return null;
-    return e(Card, { className: "wf-provider-status-card" },
+    return e(Card, { className: "wf-key-card" },
       e(CardHeader, null,
-        e(CardTitle, { size: "sm" }, "Provider Key Status")
+        e(CardTitle, { size: "sm" }, "API Key Status")
       ),
       e(CardContent, null,
-        e("div", { className: "wf-pgrid" },
-          providerStatus.map(function (p) {
-            var icon = p.key_present ? "\u2705" : p.public_listing ? "\uD83D\uDD0D" : p.oauth ? "\uD83D\uDD11" : "\u26A0";
-            var statusClass = p.key_present ? "wf-pok" : p.public_listing ? "wf-ppub" : p.oauth ? "wf-poath" : "wf-pnok";
-            return e("div", { key: p.id, className: classNames("wf-pitem", statusClass) },
-              e("span", { className: "wf-picon" }, icon),
-              e("span", { className: "wf-pname" }, p.name),
-              p.model_count_live !== null
-                ? e("span", { className: "wf-pcount" }, p.model_count_live + " probed")
-                : null,
-              p.error
-                ? e("span", { className: "wf-perror" }, p.error.substring(0, 20))
-                : null,
-              e("span", { className: "wf-ptype" }, p.free_tier_type)
+        e("p", { className: "wf-key-intro" }, keyIntro),
+        hasLiveData ? e("div", { className: "wf-provider-grid" },
+          Object.keys(PROVIDER_FREE_TYPES).map(function (pid) {
+            var ps = statusByProvider[pid];
+            var name = PROVIDER_DISPLAY[pid] || pid;
+            var freeType = PROVIDER_FREE_TYPES[pid] || "unknown";
+            var keyFound = ps && ps.key_present;
+            var modelCount = ps ? (ps.model_count_live || ps.model_count_curated || 0) : 0;
+            return e("div", {
+              key: pid,
+              className: classNames("wf-provider-cell", keyFound ? "wf-cell-key" : "wf-cell-nokey"),
+            },
+              e("span", { className: "wf-provider-cell-name" }, name),
+              e("span", { className: "wf-provider-cell-type" },
+                keyFound ? e(Badge, { tone: "success", size: "sm" }, "Key OK") : e(Badge, { tone: "outline", size: "sm" }, "No Key")
+              ),
+              e("span", { className: "wf-provider-cell-models" }, modelCount + " free")
             );
           })
-        )
+        ) : null
       )
     );
   }
 
-  function BySourceBreakdown(_ref10) {
-    var bySource = _ref10.bySource;
+  function BySourceBreakdown(_ref9) {
+    var bySource = _ref9.bySource;
     if (!bySource) return null;
-    var labels = {
-      live: "OpenRouter (free)",
-      live_hf: "HuggingFace (free)",
-      live_ollama: "Ollama Cloud (free)",
-      probed: "Probed via API key",
-      curated: "Curated (known free tiers)"
-    };
+    var labels = { live: "OpenRouter (live)", live_hf: "HuggingFace (live)", live_ollama: "Ollama (live)", curated: "Curated fallback" };
     return e(Card, { className: "wf-source-card" },
       e(CardHeader, null,
         e(CardTitle, { size: "sm" }, "Data Sources")
@@ -305,7 +428,7 @@
           Object.keys(bySource).map(function (key) {
             return e("div", { key: key, className: "wf-source-item" },
               e("span", { className: "wf-source-label" }, labels[key] || key),
-              e(Badge, { tone: "outline", size: "sm" }, bySource[key] + " models")
+              e(Badge, { tone: sourceTone(key), size: "sm" }, bySource[key] + " models")
             );
           })
         )
@@ -313,21 +436,13 @@
     );
   }
 
-  function FreeTierBreakdown(_ref11) {
-    var byFreeType = _ref11.byFreeType;
+  function FreeTierBreakdown(_ref10) {
+    var byFreeType = _ref10.byFreeType;
     if (!byFreeType) return null;
     var labels = {
-      public: "Public endpoint (no key)",
-      community: "Community inference",
-      key_free_quota: "Free tier via API key",
-      oauth_free: "Free via OAuth login",
-      no_free_tier: "Paid only (no free tier)",
-      unknown: "Free tier uncertain",
-      local: "Local / self-hosted"
-    };
-    var tones = {
-      public: "success", community: "info", key_free_quota: "warning",
-      oauth_free: "info", no_free_tier: "critical", unknown: "outline", local: "secondary"
+      public: "Public endpoint (no key)", community: "Community inference",
+      key_free_quota: "Free tier via API key", oauth_free: "Free via OAuth login",
+      no_free_tier: "Paid only (no free tier)", unknown: "Free tier uncertain", local: "Local / self-hosted"
     };
     return e(Card, { className: "wf-ft-card" },
       e(CardHeader, null,
@@ -338,7 +453,7 @@
           Object.keys(byFreeType).map(function (key) {
             return e("div", { key: key, className: "wf-source-item" },
               e("span", { className: "wf-source-label" }, labels[key] || key),
-              e(Badge, { tone: tones[key] || "outline", size: "sm" }, byFreeType[key] + " models")
+              e(Badge, { tone: freeTone(key), size: "sm" }, byFreeType[key] + " models")
             );
           })
         )
@@ -346,51 +461,57 @@
     );
   }
 
+  /* ─── Main Page Component ──────────────────────────────*/
+
   function WhatsFreePage() {
     var _useState2 = useState(null), data = _useState2[0], setData = _useState2[1];
     var _useState3 = useState(true), loading = _useState3[0], setLoading = _useState3[1];
     var _useState4 = useState(null), error = _useState4[0], setError = _useState4[1];
-    var _useState5 = useState(false), refreshing = _useState5[0], setRefreshing = _useState5[1];
+    var _useState5 = useState(false), keyStatus = _useState5[0], setKeyStatus = _useState5[1];
+    var _useState6 = useState(null), providerStatus = _useState6[0], setProviderStatus = _useState6[1];
 
     function loadData(forceRefresh) {
       setLoading(true);
       setError(null);
-      var url = API_BASE + "/models" + (forceRefresh ? "?refresh=true" : "");
-      fetch(url)
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status + ": " + r.statusText);
-          return r.json();
-        })
-        .then(function (result) {
-          setData(result);
+
+      // Fetch from public endpoints in parallel
+      Promise.all([fetchOpenRouter(), fetchHuggingFace(), fetchOllama()])
+        .then(function (results) {
+          var orModels = results[0];
+          var hfModels = results[1];
+          var ollamaModels = results[2];
+
+          var curated = CURATED_FREE.map(function (m) {
+            return {
+              id: m.id,
+              provider: m.provider,
+              provider_display: PROVIDER_DISPLAY[m.provider] || m.provider,
+              free_tier_type: m.free_type || "unknown",
+              context: m.context || null,
+              _source: "curated",
+            };
+          });
+
+          var aggregated = aggregateModels(orModels, hfModels, ollamaModels, curated);
+          setData(aggregated);
           setLoading(false);
         })
         .catch(function (err) {
-          setError(err.message || "Unknown error");
+          setError(err.message || "Failed to fetch from public endpoints");
           setLoading(false);
         });
+
+      // Try backend for key status (best-effort, may 401)
+      fetchBackendKeyStatus().then(function (ks) { setKeyStatus(ks); });
+      fetchBackendProviderStatus().then(function (ps) { setProviderStatus(ps); });
     }
 
     function handleRefresh() {
-      setRefreshing(true);
-      fetch(API_BASE + "/refresh", { method: "POST" })
-        .then(function (r) {
-          if (!r.ok) throw new Error("HTTP " + r.status);
-          return r.json();
-        })
-        .then(function (result) {
-          setData(result);
-          setRefreshing(false);
-        })
-        .catch(function (err) {
-          setError(err.message || "Refresh failed");
-          setRefreshing(false);
-        });
+      setData(null);
+      loadData(true);
     }
 
-    useEffect(function () {
-      loadData(false);
-    }, []);
+    useEffect(function () { loadData(false); }, []);
 
     // Group models by provider_display
     var grouped = useMemo(function () {
@@ -401,7 +522,7 @@
         if (!groups[p]) groups[p] = [];
         groups[p].push(m);
       });
-      // Sort groups: live sources first, then by name
+      // Sort: live sources first, then alpha
       var sorted = {};
       var liveKeys = [];
       var curatedKeys = [];
@@ -412,44 +533,33 @@
       });
       liveKeys.sort();
       curatedKeys.sort();
-      liveKeys.concat(curatedKeys).forEach(function (k) {
-        sorted[k] = groups[k];
-      });
+      liveKeys.concat(curatedKeys).forEach(function (k) { sorted[k] = groups[k]; });
       return sorted;
     }, [data]);
 
     return e("div", { className: "wf-page" },
+
       // Header
       e("div", { className: "wf-header" },
         e("div", { className: "wf-header-text" },
           e("h1", { className: "wf-title" }, "Free Models"),
           e("p", { className: "wf-subtitle" },
             "Live free LLM model availability across Hermes-supported providers. ",
-            e("strong", null, "185 models"), " available without any API key. ",
-            "Keys are auto-detected from env, .env, and config.yaml."
+            "Fetched directly from public APIs."
           )
         ),
         e("div", { className: "wf-header-actions" },
           e(Button, {
             onClick: handleRefresh,
-            disabled: refreshing,
+            disabled: loading,
             variant: "outline",
             size: "sm",
-          },
-            refreshing ? "Refreshing\u2026" : "Refresh Now"
-          )
+          }, loading ? "Loading\u2026" : "Refresh Now")
         )
       ),
 
-      // Last updated
-      data && data.cached_at_iso
-        ? e("p", { className: "wf-timestamp" },
-            "Last updated: ", fmtTime(data.cached_at_iso)
-          )
-        : null,
-
-      // Loading
-      loading && !data ? e(LoadingState()) : null,
+      // Loading indicator
+      loading && !data ? e(LoadingState, null) : null,
 
       // Error
       error ? e(ErrorState, { message: error, onRetry: function () { loadData(false); } }) : null,
@@ -457,12 +567,9 @@
       // Summary cards
       data && data.summary ? e(SummaryCards, { summary: data.summary }) : null,
 
-      // Key status + provider grid
-      data
-        ? e(KeyStatus, {
-            envKeysFound: data.detected_env_vars,
-            providerStatus: data.provider_status,
-          })
+      // Key status + provider grid (from backend, may be null if 401)
+      keyStatus || providerStatus
+        ? e(KeyStatusPanel, { keys: keyStatus, providerStatus: providerStatus })
         : null,
 
       // Breakdown cards
@@ -473,44 +580,17 @@
           )
         : null,
 
-      // Provider key status grid (compact)
-      data && data.provider_status
-        ? e(ProviderGrid, { providerStatus: data.provider_status })
-        : null,
-
-      // Errors from upstream
-      data && data.errors
-        ? (function () {
-            var errs = [];
-            if (data.errors.openrouter) errs.push("OpenRouter: " + data.errors.openrouter);
-            if (data.errors.huggingface) errs.push("HuggingFace: " + data.errors.huggingface);
-            if (data.errors.ollama) errs.push("Ollama: " + data.errors.ollama);
-            if (data.errors.probes && data.errors.probes.length > 0)
-              errs = errs.concat(data.errors.probes);
-            if (errs.length === 0) return null;
-            return e(Card, { className: "wf-error-card" },
-              e(CardContent, null,
-                e("p", { className: "wf-error-title" }, "Upstream fetch errors"),
-                errs.map(function (err, i) {
-                  return e("p", { key: i, className: "wf-error-detail" }, err);
-                })
-              )
-            );
-          })()
-        : null,
+      // Separator before model list
+      data && Object.keys(grouped).length > 0 ? e(Separator, null) : null,
 
       // Provider groups
       Object.keys(grouped).length > 0
         ? e("div", { className: "wf-provider-list" },
             Object.keys(grouped).map(function (provider) {
-              return e(ProviderGroup, {
-                key: provider,
-                provider: provider,
-                models: grouped[provider],
-              });
+              return e(ProviderGroup, { key: provider, provider: provider, models: grouped[provider] });
             })
           )
-        : (!loading ? null : null)
+        : (loading ? null : null)
     );
   }
 
