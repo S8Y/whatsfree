@@ -49,8 +49,8 @@
    * and pricing.prompt=0. Public endpoint, no key needed for listing. */
   var OR_API = "https://openrouter.ai/api/v1/models";
 
-  /* HuggingFace: text-generation-inference router, publicly listed models */
-  var HF_API = "https://router.huggingface.co/hf-inference/v1/models";
+  /* HuggingFace: public model API (no auth needed), filter to text-generation */
+  var HF_API = "https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=100";
 
   /* Ollama cloud listing */
   var OLLAMA_API = "https://cloud.ollama.com/api/v1/models";
@@ -160,10 +160,10 @@
     return fetch(HF_API, { headers: { "User-Agent": "hermes-whatsfree" } })
       .then(function (r) { if (!r.ok) throw new Error("HF " + r.status); return r.json(); })
       .then(function (data) {
-        if (!Array.isArray(data)) return [];
-        return data
+        var arr = Array.isArray(data) ? data : (data.models || data.data || []);
+        return arr
           .filter(function (m) { return m.id; })
-          .slice(0, 120)
+          .slice(0, 100)
           .map(function (m) {
             return {
               id: m.id,
@@ -474,12 +474,33 @@
       setLoading(true);
       setError(null);
 
-      // Fetch from public endpoints in parallel
-      Promise.all([fetchOpenRouter(), fetchHuggingFace(), fetchOllama()])
+      // Fetch from public endpoints — each isolated so one failure
+      // doesn't crash the rest
+      var orPromise = fetchOpenRouter();
+      var hfPromise = fetchHuggingFace();
+      var ollamaPromise = fetchOllama();
+
+      // Helper: call a promise, return [result, error]
+      function safeFetch(p) {
+        return p.then(function (r) { return { ok: true, data: r, error: null }; })
+                .catch(function (e) { return { ok: false, data: [], error: e.message || String(e) }; });
+      }
+
+      Promise.all([safeFetch(orPromise), safeFetch(hfPromise), safeFetch(ollamaPromise)])
         .then(function (results) {
-          var orModels = results[0];
-          var hfModels = results[1];
-          var ollamaModels = results[2];
+          var orResult = results[0];
+          var hfResult = results[1];
+          var ollamaResult = results[2];
+
+          var orModels = orResult.data;
+          var hfModels = hfResult.data;
+          var ollamaModels = ollamaResult.data;
+
+          // Collect errors
+          var fetchErrors = [];
+          if (!orResult.ok) fetchErrors.push("OpenRouter: " + orResult.error);
+          if (!hfResult.ok) fetchErrors.push("HuggingFace: " + hfResult.error);
+          if (!ollamaResult.ok) fetchErrors.push("Ollama: " + ollamaResult.error);
 
           var curated = CURATED_FREE.map(function (m) {
             return {
@@ -493,11 +514,8 @@
           });
 
           var aggregated = aggregateModels(orModels, hfModels, ollamaModels, curated);
+          aggregated.fetch_errors = fetchErrors;
           setData(aggregated);
-          setLoading(false);
-        })
-        .catch(function (err) {
-          setError(err.message || "Failed to fetch from public endpoints");
           setLoading(false);
         });
 
@@ -577,6 +595,18 @@
         ? e("div", { className: "wf-breakdown-row" },
             e(BySourceBreakdown, { bySource: data.summary.by_source }),
             e(FreeTierBreakdown, { byFreeType: data.summary.by_free_type })
+          )
+        : null,
+
+      // Upstream fetch warnings
+      data && data.fetch_errors && data.fetch_errors.length > 0
+        ? e(Card, { className: "wf-error-card" },
+            e(CardContent, null,
+              e("p", { className: "wf-error-title" }, "Upstream fetch notes"),
+              data.fetch_errors.map(function (err, i) {
+                return e("p", { key: i, className: "wf-error-detail" }, err);
+              })
+            )
           )
         : null,
 
