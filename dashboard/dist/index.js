@@ -512,52 +512,66 @@
     var _useState5 = useState(null), error = _useState5[0], setError = _useState5[1];
     var _useState6 = useState(null), keyStatus = _useState6[0], setKeyStatus = _useState6[1];
     var _useState7 = useState(null), providerStatus = _useState7[0], setProviderStatus = _useState7[1];
+    var _useState8 = useState(false), hfKeyFound = _useState8[0], setHfKeyFound = _useState8[1];
 
-    function loadData(forceRefresh) {
-      setLoading(true);
-      setError(null);
-
-      var orPromise = fetchOpenRouter();
-      var hfPromise = fetchHuggingFace();
-      var ollamaPromise = fetchOllama();
-
-      function safeFetch(p) {
+    function safeFetch(p) {
         return p.then(function (r) { return { ok: true, data: r, error: null }; })
                 .catch(function (e) { return { ok: false, data: [], error: e.message || String(e) }; });
       }
 
-      Promise.all([safeFetch(orPromise), safeFetch(hfPromise), safeFetch(ollamaPromise)])
-        .then(function (results) {
-          var orResult = results[0], hfResult = results[1], ollamaResult = results[2];
-          var orModels = orResult.data;
-          var hfModels = hfResult.data;
-          var ollamaModels = ollamaResult.data;
+    function loadData(forceRefresh) {
+      setLoading(true);
+      setError(null);
+      setHfKeyFound(false);
 
-          var fetchErrors = [];
-          if (!orResult.ok) fetchErrors.push("OpenRouter: " + orResult.error);
-          if (!hfResult.ok) fetchErrors.push("HuggingFace: " + hfResult.error);
-          if (!ollamaResult.ok) fetchErrors.push("Ollama: " + ollamaResult.error);
+      // Fetch all sources + backend key detection in parallel
+      Promise.all([
+        safeFetch(fetchOpenRouter()),
+        safeFetch(fetchHuggingFace()),
+        safeFetch(fetchOllama()),
+        fetchBackendKeyStatus(),
+        fetchBackendProviderStatus(),
+      ]).then(function (results) {
+        var orResult = results[0], hfResult = results[1], ollamaResult = results[2];
+        var keyData = results[3], provData = results[4];
 
-          var curated = CURATED_FREE.map(function (m) {
-            return {
-              id: m.id,
-              provider: m.provider,
-              provider_display: PROVIDER_DISPLAY[m.provider] || m.provider,
-              free_tier_type: m.free_type || "unknown",
-              context: m.context || null,
-              _source: "curated",
-            };
+        if (keyData) setKeyStatus(keyData);
+        if (provData) setProviderStatus(provData);
+
+        // Check if HuggingFace API key is configured
+        var hasHfKey = false;
+        if (keyData && keyData.env_vars_found) {
+          hasHfKey = keyData.env_vars_found.some(function (v) {
+            return v === "HF_TOKEN" || v === "HUGGINGFACE_TOKEN" || v === "HUGGINGFACEHUB_API_TOKEN";
           });
+        }
+        setHfKeyFound(hasHfKey);
 
-          var aggregated = aggregateModels(orModels, hfModels, ollamaModels, curated);
-          aggregated.fetch_errors = fetchErrors;
-          setData(aggregated);
-          setLoading(false);
+        // Only include HuggingFace models if HF_TOKEN or equivalent is set
+        var hfModels = hasHfKey ? hfResult.data : [];
+
+        var fetchErrors = [];
+        if (!orResult.ok) fetchErrors.push("OpenRouter: " + orResult.error);
+        if (!hfResult.ok && hasHfKey) fetchErrors.push("HuggingFace: " + hfResult.error);
+        if (!ollamaResult.ok) fetchErrors.push("Ollama: " + ollamaResult.error);
+        if (!hasHfKey) fetchErrors.push("HuggingFace: hidden (no HF_TOKEN / HUGGINGFACE_TOKEN detected in Hermes config)");
+
+        var curated = CURATED_FREE.map(function (m) {
+          return {
+            id: m.id,
+            provider: m.provider,
+            provider_display: PROVIDER_DISPLAY[m.provider] || m.provider,
+            free_tier_type: m.free_type || "unknown",
+            context: m.context || null,
+            _source: "curated",
+          };
         });
 
-      // Best-effort backend key detection
-      fetchBackendKeyStatus().then(function (ks) { if (ks) setKeyStatus(ks); });
-      fetchBackendProviderStatus().then(function (ps) { if (ps) setProviderStatus(ps); });
+        var aggregated = aggregateModels(orResult.data, hfModels, ollamaResult.data, curated);
+        aggregated.fetch_errors = fetchErrors;
+        setData(aggregated);
+        setLoading(false);
+      });
     }
 
     function handleRefresh() {
@@ -588,7 +602,7 @@
       var sorted = {};
       sortedKeys.forEach(function (k) { sorted[k] = byProvider[k]; });
       return sorted;
-    }, [data]);
+    }, [data, hfKeyFound]);
 
     return e("div", { className: "wf-page" },
 
@@ -599,7 +613,12 @@
           e("p", { className: "wf-subtitle" },
             "Live free LLM model availability across Hermes-supported providers. ",
             "Fetched directly from public APIs."
-          )
+          ),
+          !hfKeyFound && data ? e("p", { className: "wf-hf-note" },
+            "HuggingFace models hidden behind HF_TOKEN check \u2014 set HF_TOKEN in ",
+            e("code", null, "~/.hermes/.env"),
+            " to enable."
+          ) : null
         ),
         e("div", { className: "wf-header-actions" },
           e(Button, {

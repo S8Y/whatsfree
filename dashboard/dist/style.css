@@ -107,6 +107,20 @@
   color: var(--color-foreground);
 }
 
+.wf-hf-note {
+  margin: 0.3rem 0 0;
+  font-size: 0.75rem;
+  color: var(--color-muted-foreground);
+  font-style: italic;
+  opacity: 0.8;
+}
+.wf-hf-note code {
+  font-size: 0.7rem;
+  background: color-mix(in srgb, var(--color-muted), transparent 60%);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 .wf-provider-stats {
   display: flex;
   align-items: center;
