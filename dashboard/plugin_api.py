@@ -54,7 +54,7 @@ PROVIDER_REGISTRY: List[Dict[str, Any]] = [
     {
         "id": "openrouter",
         "name": "OpenRouter",
-        "display_name": "OpenRouter (Free)",
+        "display_name": "OpenRouter",
         "env_vars": [],
         "model_endpoint": "https://openrouter.ai/api/v1/models",
         "no_key_ok": True,
@@ -68,7 +68,7 @@ PROVIDER_REGISTRY: List[Dict[str, Any]] = [
         "name": "HuggingFace",
         "display_name": "HuggingFace Community",
         "env_vars": ["HF_TOKEN"],
-        "model_endpoint": "https://router.huggingface.co/v1/models",
+        "model_endpoint": "https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=100",
         "no_key_ok": True,
         "models_need_auth": False,
         "description": "Community inference API on HuggingFace -- 120+ models, rate-limited.",
@@ -80,7 +80,7 @@ PROVIDER_REGISTRY: List[Dict[str, Any]] = [
         "name": "Ollama Cloud",
         "display_name": "Ollama Cloud",
         "env_vars": ["OLLAMA_API_KEY"],
-        "model_endpoint": "https://ollama.com/v1/models",
+        "model_endpoint": "https://ollama.com/api/tags",
         "no_key_ok": True,
         "models_need_auth": False,
         "description": "Ollama Cloud -- 40+ models, shared inference.",
@@ -488,7 +488,7 @@ CURATED_FREE_MODELS: List[Dict[str, Any]] = [
         "context_length": 131072,
         "free_tier_type": "community",
         "auth_required": "None (HF_TOKEN optional for higher rate limits)",
-        "endpoint": "https://router.huggingface.co/v1",
+        "endpoint": "https://huggingface.co/api/models",
         "description": "Community inference, rate-limited, no key required.",
     },
     {
@@ -499,7 +499,7 @@ CURATED_FREE_MODELS: List[Dict[str, Any]] = [
         "context_length": 16384,
         "free_tier_type": "community",
         "auth_required": "None (HF_TOKEN optional)",
-        "endpoint": "https://router.huggingface.co/v1",
+        "endpoint": "https://huggingface.co/api/models",
         "description": "Microsoft's small capable model, community inference.",
     },
     {
@@ -510,7 +510,7 @@ CURATED_FREE_MODELS: List[Dict[str, Any]] = [
         "context_length": 65536,
         "free_tier_type": "community",
         "auth_required": "None",
-        "endpoint": "https://router.huggingface.co/v1",
+        "endpoint": "https://huggingface.co/api/models",
         "description": "DeepSeek V4 via HuggingFace community inference.",
     },
     # Nous Research
@@ -739,7 +739,7 @@ def _fetch_openrouter_models() -> Tuple[List[Dict[str, Any]], Optional[str]]:
                 models.append({
                     "id": mid,
                     "provider": "openrouter",
-                    "provider_display": "OpenRouter (Free)",
+                    "provider_display": "OpenRouter",
                     "name": m.get("name", mid).split(" (")[0],
                     "context_length": m.get("context_length", 0) or 0,
                     "free_tier_type": "public",
@@ -763,7 +763,7 @@ def _fetch_huggingface_models() -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Fetch models from HuggingFace Inference Router (no key needed)."""
     try:
         req = urllib.request.Request(
-            "https://router.huggingface.co/v1/models",
+            "https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=100",
             headers={"User-Agent": USER_AGENT},
         )
         resp = urllib.request.urlopen(req, timeout=15)
@@ -781,10 +781,10 @@ def _fetch_huggingface_models() -> Tuple[List[Dict[str, Any]], Optional[str]]:
                     "name": m.get("name", mid).split(" (")[0],
                     "context_length": m.get("context_length", m.get("max_context_length", 0)) or 0,
                     "free_tier_type": "community",
-                    "auth_required": "None (HF_TOKEN for higher rate limits)",
+                    "auth_required": "None",
                     "requires_key": False,
                     "key_present": _has_key_for("huggingface"),
-                    "endpoint": "https://router.huggingface.co/v1",
+                    "endpoint": "https://huggingface.co/api/models",
                     "description": m.get("description", "")[:150] if m.get("description") else "",
                     "_source": "live_hf",
                 })
@@ -796,32 +796,32 @@ def _fetch_huggingface_models() -> Tuple[List[Dict[str, Any]], Optional[str]]:
 
 
 def _fetch_ollama_models() -> Tuple[List[Dict[str, Any]], Optional[str]]:
-    """Fetch models from Ollama Cloud (no key needed for listing)."""
+    """Fetch models from Ollama (no key needed)."""
     try:
         req = urllib.request.Request(
-            "https://ollama.com/v1/models",
+            "https://ollama.com/api/tags",
             headers={"User-Agent": USER_AGENT},
         )
         resp = urllib.request.urlopen(req, timeout=15)
         data = json.loads(resp.read().decode())
         models = []
-        raw = data if isinstance(data, list) else data.get("data", data.get("models", []))
+        raw = data.get("models", [])
         for m in raw if isinstance(raw, list) else []:
             if isinstance(m, dict):
-                mid = m.get("id", "")
+                mid = m.get("name", "")
                 if not mid:
                     continue
                 models.append({
                     "id": mid,
                     "provider": "ollama-cloud",
                     "provider_display": "Ollama Cloud",
-                    "name": m.get("name", mid).split(" (")[0],
-                    "context_length": m.get("context_length", m.get("max_context_length", 0)) or 0,
+                    "name": mid,
+                    "context_length": 0,
                     "free_tier_type": "community",
-                    "auth_required": "None (OLLAMA_API_KEY for higher limits)",
+                    "auth_required": "None",
                     "requires_key": False,
                     "key_present": _has_key_for("ollama-cloud"),
-                    "endpoint": "https://ollama.com/v1",
+                    "endpoint": "https://ollama.com",
                     "description": "",
                     "_source": "live_ollama",
                 })

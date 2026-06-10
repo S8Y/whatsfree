@@ -1,7 +1,7 @@
 /* Hermes WhatsFree Plugin — dashboard UI tab.
  * Fetches free models directly from public internet endpoints (OpenRouter,
- * HuggingFace Router, Ollama Cloud) so no dashboard auth is needed for the
- * core feature. Backend key-detection API is called only when available.
+ * HuggingFace Model Hub, Ollama Tags) so no dashboard auth is needed for
+ * the core feature. Backend key-detection API is called only when available.
  */
 (function () {
   "use strict";
@@ -49,11 +49,13 @@
    * and pricing.prompt=0. Public endpoint, no key needed for listing. */
   var OR_API = "https://openrouter.ai/api/v1/models";
 
-  /* HuggingFace: public model API (no auth needed), filter to text-generation */
+  /* HuggingFace Model Hub: public API, filter to text-generation models.
+   * Returns 100 most-downloaded LLMs. No auth needed. */
   var HF_API = "https://huggingface.co/api/models?pipeline_tag=text-generation&sort=downloads&direction=-1&limit=100";
 
-  /* Ollama cloud listing */
-  var OLLAMA_API = "https://cloud.ollama.com/api/v1/models";
+  /* Ollama: /api/tags lists all models available on ollama.com.
+   * Public endpoint, no auth needed. Returns 40+ models. */
+  var OLLAMA_API = "https://ollama.com/api/tags";
 
   /* Backend (dashboard auth-gated) for key detection */
   var API_BASE = "/api/plugins/whatsfree";
@@ -80,7 +82,7 @@
   };
 
   var PROVIDER_DISPLAY = {
-    openrouter: "OpenRouter (Free)",
+    openrouter: "OpenRouter",
     huggingface: "HuggingFace Community",
     "ollama-cloud": "Ollama Cloud",
     deepseek: "DeepSeek",
@@ -110,25 +112,52 @@
     zai: "Z.AI",
   };
 
-  /* Known free models from key-required providers (curated fallback) */
+  /* Provider display name -> sort key (lower = higher, HuggingFace = last) */
+  var PROVIDER_ORDER = {
+    "OpenRouter": 1,
+    "Ollama Cloud": 2,
+    "DeepSeek": 10,
+    "Google Gemini": 11,
+    "GitHub Copilot": 12,
+    "NVIDIA NIM": 13,
+    "OpenCode Zen": 14,
+    "OpenCode Go": 15,
+    "Nous Research": 20,
+    "Qwen Portal": 21,
+    "OpenAI Codex": 22,
+    "HuggingFace Community": 99,
+  };
+
+  /* Known free models from key-required providers (curated fallback).
+   * These are models with known free-tier availability drawn from
+   * Hermes model-provider plugin data. */
   var CURATED_FREE = [
-    { id: "deepseek-chat",           provider: "deepseek",    free_type: "key_free_quota", context: 65536 },
-    { id: "deepseek-reasoner",       provider: "deepseek",    free_type: "key_free_quota", context: 65536 },
-    { id: "gemini-2.0-flash-exp",    provider: "gemini",      free_type: "key_free_quota", context: 1048576 },
-    { id: "gemini-2.0-flash-lite-preview-02-05", provider: "gemini", free_type: "key_free_quota", context: 1048576 },
-    { id: "gemini-1.5-flash",        provider: "gemini",      free_type: "key_free_quota", context: 1048576 },
-    { id: "gpt-4o-mini",             provider: "copilot",     free_type: "key_free_quota", context: 128000 },
-    { id: "gpt-4o",                  provider: "copilot",     free_type: "key_free_quota", context: 128000 },
+    // DeepSeek — free tier via API key
+    { id: "deepseek-chat",              provider: "deepseek",      free_type: "key_free_quota", context: 65536 },
+    { id: "deepseek-reasoner",          provider: "deepseek",      free_type: "key_free_quota", context: 65536 },
+    // Google Gemini — free quota via API key
+    { id: "gemini-2.0-flash-exp",       provider: "gemini",        free_type: "key_free_quota", context: 1048576 },
+    { id: "gemini-2.0-flash-lite",      provider: "gemini",        free_type: "key_free_quota", context: 1048576 },
+    { id: "gemini-1.5-flash",           provider: "gemini",        free_type: "key_free_quota", context: 1048576 },
+    // GitHub Copilot — free via key (students/OSS)
+    { id: "gpt-4o-mini",                provider: "copilot",       free_type: "key_free_quota", context: 128000 },
+    { id: "gpt-4o",                     provider: "copilot",       free_type: "key_free_quota", context: 128000 },
+    // NVIDIA NIM — free tier
     { id: "nvidia/llama-3.1-nemotron-70b-instruct", provider: "nvidia", free_type: "key_free_quota", context: 128000 },
-    { id: "opencode-zen-7b",         provider: "opencode-zen", free_type: "key_free_quota", context: 32768 },
-    { id: "opencode-go-nemotron",    provider: "opencode-go",  free_type: "key_free_quota", context: 128000 },
-    { id: "codex-claude-sonnet-4",   provider: "openai-codex", free_type: "oauth_free", context: 200000 },
-    { id: "codex-gpt-4o",           provider: "openai-codex", free_type: "oauth_free", context: 128000 },
-    { id: "nous-chat-v1",           provider: "nous",         free_type: "oauth_free", context: 65536 },
-    { id: "nous-chat-v1-32k",       provider: "nous",         free_type: "oauth_free", context: 32768 },
-    { id: "qwen-turbo",             provider: "qwen-oauth",   free_type: "oauth_free", context: 131072 },
-    { id: "qwen-plus",              provider: "qwen-oauth",   free_type: "oauth_free", context: 131072 },
-    { id: "qwen-max",               provider: "qwen-oauth",   free_type: "oauth_free", context: 32768 },
+    // OpenAI Codex — free via OAuth
+    { id: "codex-claude-sonnet-4",      provider: "openai-codex",  free_type: "oauth_free", context: 200000 },
+    { id: "codex-gpt-4o",              provider: "openai-codex",   free_type: "oauth_free", context: 128000 },
+    // Nous Research — free via OAuth device code
+    { id: "hermes-3-405b",              provider: "nous",          free_type: "oauth_free", context: 65536 },
+    { id: "hermes-3-70b",               provider: "nous",          free_type: "oauth_free", context: 65536 },
+    // Qwen Portal — free via OAuth
+    { id: "qwen-turbo",                 provider: "qwen-oauth",    free_type: "oauth_free", context: 131072 },
+    { id: "qwen-plus",                  provider: "qwen-oauth",    free_type: "oauth_free", context: 131072 },
+    { id: "qwen-max",                   provider: "qwen-oauth",    free_type: "oauth_free", context: 32768 },
+    // OpenCode Zen/Go — proxy gateways, NOT specific models. They bundle
+    // various models behind a key. Listed here as gateways, not models.
+    // { id: "opencode-zen-gateway", provider: "opencode-zen", free_type: "key_free_quota", context: 128000 },
+    // { id: "opencode-go-gateway",  provider: "opencode-go",  free_type: "key_free_quota", context: 128000 },
   ];
 
   /* ─── Live Fetch Functions ──────────────────────────────*/
@@ -147,7 +176,7 @@
             return {
               id: m.id,
               provider: "openrouter",
-              provider_display: "OpenRouter (Free)",
+              provider_display: "OpenRouter",
               free_tier_type: "public",
               context: m.context_length || null,
               _source: "live",
@@ -184,10 +213,10 @@
         var models = data && (data.models || data.data);
         if (!Array.isArray(models)) return [];
         return models
-          .filter(function (m) { return m.name || m.id; })
+          .filter(function (m) { return m.name || m.model; })
           .map(function (m) {
             return {
-              id: m.name || m.id,
+              id: m.name || m.model,
               provider: "ollama-cloud",
               provider_display: "Ollama Cloud",
               free_tier_type: "community",
@@ -201,13 +230,13 @@
   function fetchBackendKeyStatus() {
     return SDK.fetchJSON(API_BASE + "/keys")
       .then(function (data) { return data; })
-      .catch(function () { return { env_vars_found: [], total_env_vars_found: 0, sources_scanned: [] }; });
+      .catch(function () { return null; });
   }
 
   function fetchBackendProviderStatus() {
     return SDK.fetchJSON(API_BASE + "/provider-status")
       .then(function (data) { return data; })
-      .catch(function () { return { providers: [] }; });
+      .catch(function () { return null; });
   }
 
   /* ─── Aggregate All Sources ────────────────────────────*/
@@ -255,7 +284,7 @@
   /* ─── View Helpers ─────────────────────────────────────*/
 
   function sourceLabel(s) {
-    var map = { live: "Live", live_hf: "Live (HF)", live_ollama: "Live (Ollama)", curated: "Curated" };
+    var map = { live: "Live (OpenRouter)", live_hf: "Live (HF Hub)", live_ollama: "Live (Ollama)", curated: "Curated" };
     return map[s] || s;
   }
 
@@ -367,11 +396,13 @@
     );
   }
 
+  /* Key status panel — moved here to be rendered at the bottom */
   function KeyStatusPanel(_ref8) {
     var keys = _ref8.keys, providerStatus = _ref8.providerStatus;
+    var _useState2 = useState(true), collapsed = _useState2[0], setCollapsed = _useState2[1];
+
     if (!keys && !providerStatus) return null;
 
-    // Build provider status map
     var statusByProvider = {};
     var hasLiveData = false;
     if (providerStatus && providerStatus.providers) {
@@ -384,33 +415,45 @@
     var envKeys = (keys && keys.env_vars_found) || [];
     var keyIntro = envKeys.length > 0
       ? "Detected " + envKeys.length + " API key" + (envKeys.length === 1 ? "" : "s") + ": " + envKeys.join(", ")
-      : "No API keys detected. Add keys to ~/.hermes/.env for deeper provider probing.";
+      : "No API keys detected. Add keys to ~/.hermes/.env for deeper provider probing. Keys are also checked from HERMES_HOME/config.yaml providers section.";
 
-    return e(Card, { className: "wf-key-card" },
-      e(CardHeader, null,
-        e(CardTitle, { size: "sm" }, "API Key Status")
+    return e("div", { className: "wf-key-section" },
+      e("button", {
+        className: "wf-collapse-toggle",
+        onClick: function () { setCollapsed(!collapsed); },
+      },
+        e("span", { className: classNames("wf-chevron", collapsed ? "wf-chevron-collapsed" : "") }, ""),
+        e("span", { className: "wf-collapse-label" }, "API Key Detection (backend)"),
+        e(Badge, { tone: "outline", size: "sm" }, collapsed ? "Click to expand" : "Click to collapse")
       ),
-      e(CardContent, null,
-        e("p", { className: "wf-key-intro" }, keyIntro),
-        hasLiveData ? e("div", { className: "wf-provider-grid" },
-          Object.keys(PROVIDER_FREE_TYPES).map(function (pid) {
-            var ps = statusByProvider[pid];
-            var name = PROVIDER_DISPLAY[pid] || pid;
-            var freeType = PROVIDER_FREE_TYPES[pid] || "unknown";
-            var keyFound = ps && ps.key_present;
-            var modelCount = ps ? (ps.model_count_live || ps.model_count_curated || 0) : 0;
-            return e("div", {
-              key: pid,
-              className: classNames("wf-provider-cell", keyFound ? "wf-cell-key" : "wf-cell-nokey"),
-            },
-              e("span", { className: "wf-provider-cell-name" }, name),
-              e("span", { className: "wf-provider-cell-type" },
-                keyFound ? e(Badge, { tone: "success", size: "sm" }, "Key OK") : e(Badge, { tone: "outline", size: "sm" }, "No Key")
-              ),
-              e("span", { className: "wf-provider-cell-models" }, modelCount + " free")
-            );
-          })
-        ) : null
+      collapsed ? null : e(Card, { className: "wf-key-card" },
+        e(CardHeader, null,
+          e(CardTitle, { size: "sm" }, "API Key Status")
+        ),
+        e(CardContent, null,
+          e("p", { className: "wf-key-intro" }, keyIntro),
+          hasLiveData ? e("div", { className: "wf-provider-grid" },
+            Object.keys(PROVIDER_FREE_TYPES).map(function (pid) {
+              var ps = statusByProvider[pid];
+              var name = PROVIDER_DISPLAY[pid] || pid;
+              var freeType = PROVIDER_FREE_TYPES[pid] || "unknown";
+              var keyFound = ps && ps.key_present;
+              var modelCount = ps ? (ps.model_count_live || ps.model_count_curated || 0) : 0;
+              return e("div", {
+                key: pid,
+                className: classNames("wf-provider-cell", keyFound ? "wf-cell-key" : "wf-cell-nokey"),
+              },
+                e("span", { className: "wf-provider-cell-name" }, name),
+                e("span", { className: "wf-provider-cell-type" },
+                  keyFound ? e(Badge, { tone: "success", size: "sm" }, "Key OK") : e(Badge, { tone: "outline", size: "sm" }, "No Key")
+                ),
+                e("span", { className: "wf-provider-cell-models" },
+                  ps ? (ps.model_count_live || ps.model_count_curated || 0) + " free" : ""
+                )
+              );
+            })
+          ) : null
+        )
       )
     );
   }
@@ -418,7 +461,7 @@
   function BySourceBreakdown(_ref9) {
     var bySource = _ref9.bySource;
     if (!bySource) return null;
-    var labels = { live: "OpenRouter (live)", live_hf: "HuggingFace (live)", live_ollama: "Ollama (live)", curated: "Curated fallback" };
+    var labels = { live: "OpenRouter (live)", live_hf: "HuggingFace Hub (live)", live_ollama: "Ollama (live)", curated: "Curated fallback" };
     return e(Card, { className: "wf-source-card" },
       e(CardHeader, null,
         e(CardTitle, { size: "sm" }, "Data Sources")
@@ -464,23 +507,20 @@
   /* ─── Main Page Component ──────────────────────────────*/
 
   function WhatsFreePage() {
-    var _useState2 = useState(null), data = _useState2[0], setData = _useState2[1];
-    var _useState3 = useState(true), loading = _useState3[0], setLoading = _useState3[1];
-    var _useState4 = useState(null), error = _useState4[0], setError = _useState4[1];
-    var _useState5 = useState(false), keyStatus = _useState5[0], setKeyStatus = _useState5[1];
-    var _useState6 = useState(null), providerStatus = _useState6[0], setProviderStatus = _useState6[1];
+    var _useState3 = useState(null), data = _useState3[0], setData = _useState3[1];
+    var _useState4 = useState(true), loading = _useState4[0], setLoading = _useState4[1];
+    var _useState5 = useState(null), error = _useState5[0], setError = _useState5[1];
+    var _useState6 = useState(null), keyStatus = _useState6[0], setKeyStatus = _useState6[1];
+    var _useState7 = useState(null), providerStatus = _useState7[0], setProviderStatus = _useState7[1];
 
     function loadData(forceRefresh) {
       setLoading(true);
       setError(null);
 
-      // Fetch from public endpoints — each isolated so one failure
-      // doesn't crash the rest
       var orPromise = fetchOpenRouter();
       var hfPromise = fetchHuggingFace();
       var ollamaPromise = fetchOllama();
 
-      // Helper: call a promise, return [result, error]
       function safeFetch(p) {
         return p.then(function (r) { return { ok: true, data: r, error: null }; })
                 .catch(function (e) { return { ok: false, data: [], error: e.message || String(e) }; });
@@ -488,15 +528,11 @@
 
       Promise.all([safeFetch(orPromise), safeFetch(hfPromise), safeFetch(ollamaPromise)])
         .then(function (results) {
-          var orResult = results[0];
-          var hfResult = results[1];
-          var ollamaResult = results[2];
-
+          var orResult = results[0], hfResult = results[1], ollamaResult = results[2];
           var orModels = orResult.data;
           var hfModels = hfResult.data;
           var ollamaModels = ollamaResult.data;
 
-          // Collect errors
           var fetchErrors = [];
           if (!orResult.ok) fetchErrors.push("OpenRouter: " + orResult.error);
           if (!hfResult.ok) fetchErrors.push("HuggingFace: " + hfResult.error);
@@ -519,9 +555,9 @@
           setLoading(false);
         });
 
-      // Try backend for key status (best-effort, may 401)
-      fetchBackendKeyStatus().then(function (ks) { setKeyStatus(ks); });
-      fetchBackendProviderStatus().then(function (ps) { setProviderStatus(ps); });
+      // Best-effort backend key detection
+      fetchBackendKeyStatus().then(function (ks) { if (ks) setKeyStatus(ks); });
+      fetchBackendProviderStatus().then(function (ps) { if (ps) setProviderStatus(ps); });
     }
 
     function handleRefresh() {
@@ -531,27 +567,26 @@
 
     useEffect(function () { loadData(false); }, []);
 
-    // Group models by provider_display
+    // Group models by provider_display using PROVIDER_ORDER for sorting
     var grouped = useMemo(function () {
       if (!data || !data.models) return {};
-      var groups = {};
+      var byProvider = {};
       data.models.forEach(function (m) {
         var p = m.provider_display || "Other";
-        if (!groups[p]) groups[p] = [];
-        groups[p].push(m);
+        if (!byProvider[p]) byProvider[p] = [];
+        byProvider[p].push(m);
       });
-      // Sort: live sources first, then alpha
+
+      var orderMap = PROVIDER_ORDER;
+      var sortedKeys = Object.keys(byProvider).sort(function (a, b) {
+        var oa = orderMap[a] || 50;
+        var ob = orderMap[b] || 50;
+        if (oa !== ob) return oa - ob;
+        return a.localeCompare(b);
+      });
+
       var sorted = {};
-      var liveKeys = [];
-      var curatedKeys = [];
-      Object.keys(groups).forEach(function (k) {
-        var hasLive = groups[k].some(function (m) { return m._source && m._source.indexOf("live") === 0; });
-        if (hasLive) liveKeys.push(k);
-        else curatedKeys.push(k);
-      });
-      liveKeys.sort();
-      curatedKeys.sort();
-      liveKeys.concat(curatedKeys).forEach(function (k) { sorted[k] = groups[k]; });
+      sortedKeys.forEach(function (k) { sorted[k] = byProvider[k]; });
       return sorted;
     }, [data]);
 
@@ -585,11 +620,6 @@
       // Summary cards
       data && data.summary ? e(SummaryCards, { summary: data.summary }) : null,
 
-      // Key status + provider grid (from backend, may be null if 401)
-      keyStatus || providerStatus
-        ? e(KeyStatusPanel, { keys: keyStatus, providerStatus: providerStatus })
-        : null,
-
       // Breakdown cards
       data && data.summary
         ? e("div", { className: "wf-breakdown-row" },
@@ -613,14 +643,20 @@
       // Separator before model list
       data && Object.keys(grouped).length > 0 ? e(Separator, null) : null,
 
-      // Provider groups
+      // Provider groups (sorted by PROVIDER_ORDER, HuggingFace last)
       Object.keys(grouped).length > 0
         ? e("div", { className: "wf-provider-list" },
             Object.keys(grouped).map(function (provider) {
               return e(ProviderGroup, { key: provider, provider: provider, models: grouped[provider] });
             })
           )
-        : (loading ? null : null)
+        : (loading ? null : null),
+
+      // Separator before key status (always at bottom)
+      data && (keyStatus || providerStatus) ? e(Separator, null) : null,
+
+      // Key status panel at the bottom, default collapsed
+      e(KeyStatusPanel, { keys: keyStatus, providerStatus: providerStatus })
     );
   }
 
